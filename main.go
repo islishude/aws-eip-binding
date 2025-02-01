@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	// AWS SDK v2 imports
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -63,13 +64,24 @@ func main() {
 		os.Exit(1)
 	}
 	targetIP := os.Args[1]
-	log.Printf("Received target EIP: %s", targetIP)
+
+	// If cli argument equals "POD_NAME", process accordingly.
+	// This is useful when running the binary as a Kubernetes init container.
+	if targetIP == "POD_NAME" {
+		podVal := os.Getenv("POD_NAME")
+		if podVal == "" {
+			log.Fatal("Environment variable POD_NAME is empty")
+		}
+		targetIP = os.Getenv(strings.ReplaceAll(podVal, "-", "_"))
+		log.Printf("Using processed POD_NAME value as target IP: %s", targetIP)
+	} else {
+		log.Printf("Received target argument: %s", targetIP)
+	}
 
 	// Step 2: Validate that the provided IP is a valid IPv4 address.
 	ip := net.ParseIP(targetIP)
 	if ip == nil || ip.To4() == nil {
-		fmt.Println("Invalid IPv4 address provided.")
-		os.Exit(1)
+		log.Fatalf("Invalid IPv4 address provided %s", targetIP)
 	}
 
 	// Step 3: Load AWS configuration and create an EC2 client.
