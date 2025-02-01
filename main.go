@@ -63,6 +63,7 @@ func main() {
 		os.Exit(1)
 	}
 	targetIP := os.Args[1]
+	log.Printf("Received target EIP: %s", targetIP)
 
 	// Step 2: Validate that the provided IP is a valid IPv4 address.
 	ip := net.ParseIP(targetIP)
@@ -77,9 +78,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
+	log.Println("AWS configuration loaded successfully", "region", cfg.Region)
 	ec2Client := ec2.NewFromConfig(cfg)
 
 	// Step 4: Describe addresses for the provided EIP.
+	log.Printf("Describing addresses")
 	descOut, err := ec2Client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
 		PublicIps: []string{targetIP},
 	})
@@ -89,12 +92,14 @@ func main() {
 	address := descOut.Addresses[0]
 
 	// Step 5: Obtain IMDSv2 metadata token.
+	log.Println("Requesting IMDSv2 metadata token")
 	mdToken, err := getMetadataToken()
 	if err != nil {
 		log.Fatalf("error fetching metadata token: %v", err)
 	}
 
 	// Step 6: Retrieve instance's public IPv4.
+	log.Println("Fetching instance public IPv4 from metadata")
 	instancePublicIP, err := getMetadata(mdToken, "meta-data/public-ipv4")
 	if err != nil {
 		log.Fatalf("error fetching public-ipv4: %v", err)
@@ -106,6 +111,7 @@ func main() {
 	}
 
 	// Step 7: Retrieve instance ID.
+	log.Println("Fetching instance ID from metadata")
 	instanceID, err := getMetadata(mdToken, "meta-data/instance-id")
 	if err != nil {
 		log.Fatalf("error fetching instance-id: %v", err)
@@ -113,6 +119,7 @@ func main() {
 
 	// Step 8: If the EIP is associated with another instance, disassociate it.
 	if address.AssociationId != nil {
+		log.Printf("Disassociating EIP from previous association %s", *address.AssociationId)
 		_, err = ec2Client.DisassociateAddress(ctx, &ec2.DisassociateAddressInput{
 			AssociationId: address.AssociationId,
 		})
@@ -122,6 +129,7 @@ func main() {
 	}
 
 	// Step 9: Retrieve the network interface ID using the instance's public IP.
+	log.Printf("Retrieving network interface for instance public IP %s", instancePublicIP)
 	eniOut, err := ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
 		Filters: []types.Filter{
 			{
@@ -136,6 +144,7 @@ func main() {
 	networkInterfaceID := eniOut.NetworkInterfaces[0].NetworkInterfaceId
 
 	// Step 10: Associate the EIP with the current instance by specifying AllocationId and NetworkInterfaceId.
+	log.Printf("Associating EIP %s with instance %s", targetIP, instanceID)
 	associateInput := &ec2.AssociateAddressInput{
 		AllocationId:       address.AllocationId,
 		NetworkInterfaceId: networkInterfaceID,
@@ -147,5 +156,5 @@ func main() {
 	}
 
 	// Step 11: Confirm successful association.
-	fmt.Printf("Successfully associated EIP %s with instance %s\n", targetIP, instanceID)
+	log.Printf("Successfully associated EIP %s with instance %s", targetIP, instanceID)
 }
