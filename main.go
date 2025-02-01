@@ -94,7 +94,6 @@ func main() {
 	ec2Client := ec2.NewFromConfig(cfg)
 
 	// Step 4: Describe addresses for the provided EIP.
-	log.Printf("Describing addresses")
 	descOut, err := ec2Client.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
 		PublicIps: []string{targetIP},
 	})
@@ -104,14 +103,12 @@ func main() {
 	address := descOut.Addresses[0]
 
 	// Step 5: Obtain IMDSv2 metadata token.
-	log.Println("Requesting IMDSv2 metadata token")
 	mdToken, err := getMetadataToken()
 	if err != nil {
 		log.Fatalf("error fetching metadata token: %v", err)
 	}
 
 	// Step 6: Retrieve instance's public IPv4.
-	log.Println("Fetching instance public IPv4 from metadata")
 	instancePublicIP, err := getMetadata(mdToken, "meta-data/public-ipv4")
 	if err != nil {
 		log.Fatalf("error fetching public-ipv4: %v", err)
@@ -119,11 +116,10 @@ func main() {
 	// If the target IP is already assigned to this instance, exit.
 	if targetIP == instancePublicIP {
 		fmt.Printf("EIP %s is already associated with this instance\n", targetIP)
-		os.Exit(0)
+		return
 	}
 
 	// Step 7: Retrieve instance ID.
-	log.Println("Fetching instance ID from metadata")
 	instanceID, err := getMetadata(mdToken, "meta-data/instance-id")
 	if err != nil {
 		log.Fatalf("error fetching instance-id: %v", err)
@@ -141,7 +137,6 @@ func main() {
 	}
 
 	// Step 9: Retrieve the network interface ID using the instance's public IP.
-	log.Printf("Retrieving network interface for instance public IP %s", instancePublicIP)
 	eniOut, err := ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
 		Filters: []types.Filter{
 			{
@@ -156,7 +151,6 @@ func main() {
 	networkInterfaceID := eniOut.NetworkInterfaces[0].NetworkInterfaceId
 
 	// Step 10: Associate the EIP with the current instance by specifying AllocationId and NetworkInterfaceId.
-	log.Printf("Associating EIP %s with instance %s", targetIP, instanceID)
 	associateInput := &ec2.AssociateAddressInput{
 		AllocationId:       address.AllocationId,
 		NetworkInterfaceId: networkInterfaceID,
@@ -164,9 +158,8 @@ func main() {
 	}
 	_, err = ec2Client.AssociateAddress(ctx, associateInput)
 	if err != nil {
-		log.Fatalf("failed to associate EIP %s: %v", targetIP, err)
+		log.Fatalf("failed to associate EIP %s with instance %s: %v", targetIP, instanceID, err)
 	}
 
-	// Step 11: Confirm successful association.
 	log.Printf("Successfully associated EIP %s with instance %s", targetIP, instanceID)
 }
