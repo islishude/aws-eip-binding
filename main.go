@@ -68,12 +68,12 @@ func main() {
 	// If cli argument equals "POD_NAME", process accordingly.
 	// This is useful when running the binary as a Kubernetes init container.
 	if targetIP == "POD_NAME" {
-		podVal := os.Getenv("POD_NAME")
-		if podVal == "" {
+		podName := os.Getenv("POD_NAME")
+		if podName == "" {
 			log.Fatal("Environment variable POD_NAME is empty")
 		}
-		targetIP = os.Getenv(strings.ReplaceAll(podVal, "-", "_"))
-		log.Printf("Using processed POD_NAME value as target IP: %s", targetIP)
+		targetIP = os.Getenv(strings.ReplaceAll(podName, "-", "_"))
+		log.Printf("Using processed POD_NAME %s value as target IP: %s", podName, targetIP)
 	} else {
 		log.Printf("Received target argument: %s", targetIP)
 	}
@@ -115,7 +115,7 @@ func main() {
 	}
 	// If the target IP is already assigned to this instance, exit.
 	if targetIP == instancePublicIP {
-		fmt.Printf("EIP %s is already associated with this instance\n", targetIP)
+		log.Printf("EIP %s is already associated with this instance\n", targetIP)
 		return
 	}
 
