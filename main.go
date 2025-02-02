@@ -20,7 +20,7 @@ import (
 // getMetadataToken fetches an IMDSv2 token from the EC2 metadata service.
 func getMetadataToken() (string, error) {
 	// Create a PUT request to obtain the IMDSv2 token.
-	req, err := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	req, err := http.NewRequest(http.MethodPut, "http://169.254.169.254/latest/api/token", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -40,7 +40,7 @@ func getMetadataToken() (string, error) {
 // getMetadata retrieves metadata from EC2 instance by providing the token and metadata path.
 func getMetadata(token, path string) (string, error) {
 	// Create a GET request with the token in header.
-	req, err := http.NewRequest("GET", "http://169.254.169.254/latest/"+path, nil)
+	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/"+path, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create metadata request: %w", err)
 	}
