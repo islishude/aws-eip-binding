@@ -16,6 +16,31 @@ This CLI tool associates an Elastic IP (EIP) to the current EC2 instance using A
    ./aws-eip-binding <EIP>
    ```
 
+## Prerequisites
+
+1. You're using IMDSv2
+
+2. Ensure that the IAM role or user has permissions similar to the following:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AssociateAddress",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeTags",
+        "ec2:DisassociateAddress"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
 ### Using POD_NAME Argument
 
 If you pass "POD_NAME" as the CLI argument, the program will:
@@ -49,27 +74,4 @@ initContainers:
             fieldPath: metadata.name
       - name: "test_0"
         value: "54.162.153.80"
-```
-
-## Required AWS IAM Policy Permissions
-
-Ensure that the IAM role or user has permissions similar to the following:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ec2:AssociateAddress",
-        "ec2:DescribeAddresses",
-        "ec2:DescribeNetworkInterfaces",
-        "ec2:DescribeTags",
-        "ec2:DisassociateAddress"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
 ```
