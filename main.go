@@ -149,12 +149,18 @@ func main() {
 		log.Fatalf("failed to get network interface for public IP %s: %v", instancePublicIP, err)
 	}
 	networkInterfaceID := eniOut.NetworkInterfaces[0].NetworkInterfaceId
+	log.Printf(
+		"Associating EIP %s (allocation=%s) to ENI %s on instance %s",
+		targetIP,
+		*address.AllocationId,
+		*networkInterfaceID,
+		instanceID,
+	)
 
 	// Step 10: Associate the EIP with the current instance by specifying AllocationId and NetworkInterfaceId.
 	associateInput := &ec2.AssociateAddressInput{
 		AllocationId:       address.AllocationId,
 		NetworkInterfaceId: networkInterfaceID,
-		InstanceId:         aws.String(instanceID), // Optional for traceability.
 	}
 	_, err = ec2Client.AssociateAddress(ctx, associateInput)
 	if err != nil {
