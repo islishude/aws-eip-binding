@@ -150,12 +150,12 @@ func main() {
 	}
 	networkInterfaceID := eniOut.NetworkInterfaces[0].NetworkInterfaceId
 	log.Printf(
-	    "Associating EIP %s (allocation=%s) to ENI %s on instance %s",
-	    targetIP,
-	    aws.String(address.AllocationId),
-	    aws.String(networkInterfaceID),
-	    aws.String(instanceID),
-    )
+		"Associating EIP %s (allocation=%s) to ENI %s on instance %s",
+		targetIP,
+		*address.AllocationId,
+		*networkInterfaceID,
+		instanceID,
+	)
 
 	// Step 10: Associate the EIP with the current instance by specifying AllocationId and NetworkInterfaceId.
 	associateInput := &ec2.AssociateAddressInput{
