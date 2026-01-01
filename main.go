@@ -29,7 +29,7 @@ func getMetadataToken() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get metadata token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read metadata token: %w", err)
@@ -49,7 +49,7 @@ func getMetadata(token, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get metadata %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read metadata %s: %w", path, err)
