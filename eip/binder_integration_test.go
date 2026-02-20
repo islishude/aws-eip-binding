@@ -1,5 +1,3 @@
-//go:build integration
-
 package eip
 
 import (
@@ -21,6 +19,9 @@ import (
 // test if neither variable is set.
 func localstackEC2Client(t *testing.T) *ec2.Client {
 	t.Helper()
+	if os.Getenv("ENABLE_INTEGRATION_TESTS") != "true" {
+		t.Skip("ENABLE_INTEGRATION_TESTS is not true – skipping integration test")
+	}
 
 	endpoint := os.Getenv("AWS_ENDPOINT_URL")
 	if endpoint == "" {
