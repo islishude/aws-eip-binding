@@ -127,6 +127,15 @@ resource "aws_security_group" "endpoints" {
   }
 }
 
+resource "aws_network_interface" "previous_owner" {
+  subnet_id       = aws_subnet.public.id
+  security_groups = [aws_security_group.runner.id]
+
+  tags = {
+    Name = "${var.name_prefix}-previous-owner"
+  }
+}
+
 resource "aws_vpc_endpoint" "ssm" {
   for_each = toset(["ssm", "ssmmessages", "ec2messages"])
 
@@ -145,7 +154,10 @@ resource "aws_vpc_endpoint" "ssm" {
 resource "aws_eip" "target" {
   domain = "vpc"
 
-  depends_on = [aws_internet_gateway.main]
+  depends_on = [
+    aws_internet_gateway.main,
+    aws_network_interface.previous_owner,
+  ]
 
   tags = {
     Name = "${var.name_prefix}-target"

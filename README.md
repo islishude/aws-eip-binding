@@ -75,10 +75,17 @@ AWS_REGION=us-east-1 scripts/e2e-terraform.sh
 ```
 
 The E2E harness builds a Linux amd64 binary, uploads it to a temporary S3
-bucket, creates a disposable VPC and Amazon Linux 2023 EC2 instance, and uses
-SSM to run the CLI inside the instance. It validates real IMDSv2, the instance
-IAM role, IPv4 EIP association, and IPv6 address assignment. Set
-`E2E_ENABLE_IPV6=false` to run only the IPv4 scenario.
+bucket, creates a disposable VPC, an Amazon Linux 2023 EC2 instance, and a
+standalone ENI used as the previous address owner. SSM runs the CLI inside the
+instance after pre-associating the target EIP and, when enabled, pre-assigning
+the target IPv6 address to that previous-owner ENI. The test validates real
+IMDSv2, the instance IAM role, IPv4 EIP disassociation and reassociation, and
+IPv6 unassign-and-move behavior. Set `E2E_ENABLE_IPV6=false` to run only the
+IPv4 scenario.
+
+SSM command output is written to the temporary artifact bucket under
+`ssm-output/<name-prefix>/`, which is useful for failed-run debugging before
+Terraform destroys the test bucket.
 
 Only run E2E tests in a disposable AWS account or isolated region. Terraform
 creates real infrastructure that can incur short-lived EC2, EIP, S3, and VPC

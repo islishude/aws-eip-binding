@@ -59,6 +59,12 @@ resource "aws_iam_role_policy" "runner" {
         Effect   = "Allow"
         Action   = "s3:GetObject"
         Resource = "${aws_s3_bucket.artifacts.arn}/${aws_s3_object.binary.key}"
+      },
+      {
+        Sid      = "WriteSSMOutput"
+        Effect   = "Allow"
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.artifacts.arn}/${local.ssm_output_prefix}/*"
       }
     ]
   })
