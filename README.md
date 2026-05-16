@@ -1,6 +1,6 @@
 # AWS EIP Binding CLI
 
-This CLI tool associates an Elastic IP (EIP) to the current EC2 instance using AWS SDK for Go.
+This CLI tool associates an IPv4 Elastic IP (EIP), or moves a specified IPv6 address, to the current EC2 instance using AWS SDK for Go.
 
 ## Usage
 
@@ -10,17 +10,21 @@ This CLI tool associates an Elastic IP (EIP) to the current EC2 instance using A
    go build -o aws-eip-binding
    ```
 
-2. Run the tool with your target EIP:
+2. Run the tool with your target IP:
 
    ```
-   ./aws-eip-binding <EIP>
+   ./aws-eip-binding <IP>
    ```
+
+   IPv4 targets use Elastic IP association APIs. IPv6 targets are assigned to the current instance's primary ENI; if the IPv6 address is already assigned to another ENI, the tool unassigns it first and then assigns it to the current primary ENI. The IPv6 address must belong to the current primary ENI subnet's IPv6 CIDR block.
 
 ## Prerequisites
 
 1. You're using IMDSv2
 
-2. Ensure that the IAM role or user has permissions similar to the following:
+2. For IPv6 targets, the instance must support the IMDS IPv6 endpoint (`http://[fd00:ec2::254]`) and EC2 dual-stack service endpoints. The IMDS endpoint can still be overridden with `AWS_EC2_METADATA_SERVICE_ENDPOINT` for custom environments.
+
+3. Ensure that the IAM role or user has permissions similar to the following:
 
 ```json
 {
@@ -30,10 +34,13 @@ This CLI tool associates an Elastic IP (EIP) to the current EC2 instance using A
       "Effect": "Allow",
       "Action": [
         "ec2:AssociateAddress",
+        "ec2:AssignIpv6Addresses",
         "ec2:DescribeAddresses",
         "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSubnets",
         "ec2:DescribeTags",
-        "ec2:DisassociateAddress"
+        "ec2:DisassociateAddress",
+        "ec2:UnassignIpv6Addresses"
       ],
       "Resource": "*"
     }
@@ -57,6 +64,8 @@ For example, if your environment is configured as follows:
 Running:
 aws-eip-binding POD_NAME
 will set the target IP to 54.162.153.80.
+
+The resolved value can also be an IPv6 address, for example `2001:db8::1234`.
 
 For example in Kubernetes, you can use the following snippet to set the environment variable:
 

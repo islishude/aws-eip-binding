@@ -2,15 +2,17 @@ package eip
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 )
 
 // Config holds the resolved configuration for EIP binding.
 type Config struct {
-	// TargetIP is the Elastic IP address to associate.
+	// TargetIP is the IPv4 Elastic IP address or IPv6 address to associate.
 	TargetIP string
+	// Family is the address family: "ipv4" or "ipv6".
+	Family string
 }
 
 // ParseConfig resolves the target IP from CLI arguments and environment variables.
@@ -40,12 +42,17 @@ func ParseConfig(args []string, getenv func(string) string) (*Config, error) {
 		}
 	}
 
-	ip := net.ParseIP(targetIP)
-	if ip == nil || ip.To4() == nil {
-		return nil, fmt.Errorf("invalid IPv4 address: %s", targetIP)
+	ip, err := netip.ParseAddr(targetIP)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IP address: %s", targetIP)
+	}
+	ip = ip.Unmap()
+	family := IPFamilyIPv4
+	if !ip.Is4() {
+		family = IPFamilyIPv6
 	}
 
-	return &Config{TargetIP: targetIP}, nil
+	return &Config{TargetIP: ip.String(), Family: family}, nil
 }
 
 // ParseConfigFromOS is a convenience wrapper that calls ParseConfig with os.Args and os.Getenv.

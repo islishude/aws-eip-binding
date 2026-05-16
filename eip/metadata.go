@@ -4,7 +4,54 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 )
+
+const (
+	IMDSEndpointIPv4 = "http://169.254.169.254"
+	IMDSEndpointIPv6 = "http://[fd00:ec2::254]"
+
+	awsEC2MetadataServiceEndpointEnv = "AWS_EC2_METADATA_SERVICE_ENDPOINT"
+)
+
+type IMDSEndpointMode string
+
+const (
+	IMDSEndpointModeIPv4 IMDSEndpointMode = "IPv4"
+	IMDSEndpointModeIPv6 IMDSEndpointMode = "IPv6"
+)
+
+type imdsClientOptions struct {
+	httpClient   *http.Client
+	endpoint     string
+	endpointSet  bool
+	endpointMode IMDSEndpointMode
+}
+
+// IMDSClientOption configures an IMDSClient created by NewIMDSClient.
+type IMDSClientOption func(*imdsClientOptions)
+
+// WithIMDSHTTPClient sets the HTTP client used by IMDSClient.
+func WithIMDSHTTPClient(client *http.Client) IMDSClientOption {
+	return func(o *imdsClientOptions) {
+		o.httpClient = client
+	}
+}
+
+// WithIMDSEndpoint overrides the IMDS endpoint.
+func WithIMDSEndpoint(endpoint string) IMDSClientOption {
+	return func(o *imdsClientOptions) {
+		o.endpoint = endpoint
+		o.endpointSet = endpoint != ""
+	}
+}
+
+// WithIMDSEndpointMode selects the default IMDS endpoint for IPv4 or IPv6.
+func WithIMDSEndpointMode(mode IMDSEndpointMode) IMDSClientOption {
+	return func(o *imdsClientOptions) {
+		o.endpointMode = mode
+	}
+}
 
 // MetadataClient abstracts EC2 instance metadata retrieval.
 type MetadataClient interface {
@@ -18,16 +65,42 @@ type MetadataClient interface {
 type IMDSClient struct {
 	// HTTPClient is the HTTP client used to call the metadata endpoint.
 	HTTPClient *http.Client
-	// Endpoint is the base URL for the metadata service (default: http://169.254.169.254).
+	// Endpoint is the base URL for the metadata service.
 	Endpoint string
 }
 
 // NewIMDSClient creates a new IMDSClient with default settings.
-func NewIMDSClient() *IMDSClient {
-	return &IMDSClient{
-		HTTPClient: http.DefaultClient,
-		Endpoint:   "http://169.254.169.254",
+func NewIMDSClient(optFns ...IMDSClientOption) *IMDSClient {
+	opts := imdsClientOptions{
+		httpClient:   http.DefaultClient,
+		endpointMode: IMDSEndpointModeIPv4,
 	}
+	for _, fn := range optFns {
+		fn(&opts)
+	}
+
+	endpoint := defaultIMDSEndpoint(opts.endpointMode)
+	if envEndpoint := os.Getenv(awsEC2MetadataServiceEndpointEnv); envEndpoint != "" {
+		endpoint = envEndpoint
+	}
+	if opts.endpointSet {
+		endpoint = opts.endpoint
+	}
+	if opts.httpClient == nil {
+		opts.httpClient = http.DefaultClient
+	}
+
+	return &IMDSClient{
+		HTTPClient: opts.httpClient,
+		Endpoint:   endpoint,
+	}
+}
+
+func defaultIMDSEndpoint(mode IMDSEndpointMode) string {
+	if mode == IMDSEndpointModeIPv6 {
+		return IMDSEndpointIPv6
+	}
+	return IMDSEndpointIPv4
 }
 
 // GetToken fetches an IMDSv2 token from the EC2 metadata service.

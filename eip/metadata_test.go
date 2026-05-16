@@ -138,3 +138,48 @@ func TestIMDSClient_GetMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestNewIMDSClientEndpointSelection(t *testing.T) {
+	tests := []struct {
+		name    string
+		options []IMDSClientOption
+		env     string
+		want    string
+	}{
+		{
+			name: "default IPv4",
+			want: IMDSEndpointIPv4,
+		},
+		{
+			name:    "IPv6 endpoint mode",
+			options: []IMDSClientOption{WithIMDSEndpointMode(IMDSEndpointModeIPv6)},
+			want:    IMDSEndpointIPv6,
+		},
+		{
+			name:    "environment endpoint override",
+			options: []IMDSClientOption{WithIMDSEndpointMode(IMDSEndpointModeIPv6)},
+			env:     "http://metadata.local",
+			want:    "http://metadata.local",
+		},
+		{
+			name:    "explicit endpoint override",
+			options: []IMDSClientOption{WithIMDSEndpointMode(IMDSEndpointModeIPv6), WithIMDSEndpoint("http://explicit.local")},
+			env:     "http://metadata.local",
+			want:    "http://explicit.local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(awsEC2MetadataServiceEndpointEnv, tt.env)
+
+			c := NewIMDSClient(tt.options...)
+			if c.Endpoint != tt.want {
+				t.Errorf("Endpoint = %q, want %q", c.Endpoint, tt.want)
+			}
+			if c.HTTPClient == nil {
+				t.Fatal("HTTPClient is nil")
+			}
+		})
+	}
+}
