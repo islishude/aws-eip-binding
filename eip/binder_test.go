@@ -183,24 +183,20 @@ func silentLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
 
-func stringPtr(s string) *string {
-	return &s
-}
-
 func elasticAddress(publicIP, allocationID, associationID string) types.Address {
 	addr := types.Address{
-		PublicIp:     stringPtr(publicIP),
-		AllocationId: stringPtr(allocationID),
+		PublicIp:     new(publicIP),
+		AllocationId: new(allocationID),
 	}
 	if associationID != "" {
-		addr.AssociationId = stringPtr(associationID)
+		addr.AssociationId = new(associationID)
 	}
 	return addr
 }
 
 func networkInterface(id string) types.NetworkInterface {
 	return types.NetworkInterface{
-		NetworkInterfaceId: stringPtr(id),
+		NetworkInterfaceId: new(id),
 	}
 }
 
@@ -208,22 +204,22 @@ func primaryENI(ipv6s ...string) types.NetworkInterface {
 	addresses := make([]types.NetworkInterfaceIpv6Address, 0, len(ipv6s))
 	for _, ipv6 := range ipv6s {
 		addresses = append(addresses, types.NetworkInterfaceIpv6Address{
-			Ipv6Address: stringPtr(ipv6),
+			Ipv6Address: new(ipv6),
 		})
 	}
 
 	return types.NetworkInterface{
-		NetworkInterfaceId: stringPtr("eni-primary"),
-		SubnetId:           stringPtr("subnet-1"),
+		NetworkInterfaceId: new("eni-primary"),
+		SubnetId:           new("subnet-1"),
 		Ipv6Addresses:      addresses,
 	}
 }
 
 func subnetWithIPv6CIDR(cidr string) types.Subnet {
 	return types.Subnet{
-		SubnetId: stringPtr("subnet-1"),
+		SubnetId: new("subnet-1"),
 		Ipv6CidrBlockAssociationSet: []types.SubnetIpv6CidrBlockAssociation{
-			{Ipv6CidrBlock: stringPtr(cidr)},
+			{Ipv6CidrBlock: new(cidr)},
 		},
 	}
 }
@@ -384,7 +380,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
 					requireStringPtr(t, in.NetworkInterfaceId, "eni-current", "NetworkInterfaceId")
-					return &ec2.AssociateAddressOutput{AssociationId: stringPtr("eipassoc-new")}, nil
+					return &ec2.AssociateAddressOutput{AssociationId: new("eipassoc-new")}, nil
 				}
 				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
 			},
@@ -427,7 +423,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
 					requireStringPtr(t, in.NetworkInterfaceId, "eni-current", "NetworkInterfaceId")
-					return &ec2.AssociateAddressOutput{AssociationId: stringPtr("eipassoc-new")}, nil
+					return &ec2.AssociateAddressOutput{AssociationId: new("eipassoc-new")}, nil
 				}
 				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
 			},

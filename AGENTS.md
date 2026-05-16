@@ -40,6 +40,7 @@ ENABLE_INTEGRATION_TESTS=true AWS_ENDPOINT_URL=http://localhost:4566 go test ./e
 - Keep CLI parsing and environment resolution in `eip/config.go`; keep AWS
   binding behavior in `eip/binder.go`.
 - Avoid adding new dependencies unless they materially simplify the code.
+- Do not use AWS SDK helper functions such as `aws.String`, `aws.Int`, or similar helpers to allocate pointer values. This project targets Go 1.26, so use `new(expr)` instead.
 
 ## Testing Guidelines
 

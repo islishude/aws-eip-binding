@@ -14,6 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
+// These LocalStack tests cover the IPv4 EC2 API state transitions used by the
+// binder. They intentionally do not validate IAM policy enforcement; use the
+// AWS Service Authorization Reference or the opt-in AWS E2E tests for that.
+
 // localstackEC2Client builds an EC2 client pointed at LocalStack.
 // It reads AWS_ENDPOINT_URL (with fallback to AWS_ENDPOINT), and skips the
 // test if neither variable is set.
@@ -118,6 +122,112 @@ func createENI(t *testing.T, ec2c *ec2.Client) *types.NetworkInterface {
 // prefix, making it easy to distinguish from other test output.
 func integrationLogger() *log.Logger {
 	return log.New(os.Stderr, "[integration] ", 0)
+}
+
+// TestIntegration_LocalStackCapabilityProbe verifies that the LocalStack EC2
+// surface supports the exact IPv4 APIs and filters the integration suite needs.
+func TestIntegration_LocalStackCapabilityProbe(t *testing.T) {
+	ctx := context.Background()
+	ec2c := localstackEC2Client(t)
+
+	eipOut := allocateEIP(t, ec2c)
+	if eipOut.PublicIp == nil {
+		t.Fatal("LocalStack AllocateAddress returned no PublicIp")
+	}
+	if eipOut.AllocationId == nil {
+		t.Fatal("LocalStack AllocateAddress returned no AllocationId")
+	}
+
+	eni := createENI(t, ec2c)
+	if eni.NetworkInterfaceId == nil {
+		t.Fatal("LocalStack CreateNetworkInterface returned no NetworkInterfaceId")
+	}
+
+	descOut, err := ec2c.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+		PublicIps: []string{*eipOut.PublicIp},
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing DescribeAddresses by PublicIps: %v", err)
+	}
+	if len(descOut.Addresses) != 1 {
+		t.Fatalf("LocalStack DescribeAddresses by PublicIps returned %d addresses, want 1", len(descOut.Addresses))
+	}
+
+	assocOut, err := ec2c.AssociateAddress(ctx, &ec2.AssociateAddressInput{
+		AllocationId:       eipOut.AllocationId,
+		NetworkInterfaceId: eni.NetworkInterfaceId,
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing AssociateAddress to ENI: %v", err)
+	}
+	if assocOut.AssociationId == nil {
+		t.Fatal("LocalStack AssociateAddress returned no AssociationId")
+	}
+	t.Cleanup(func() {
+		_, _ = ec2c.DisassociateAddress(context.Background(), &ec2.DisassociateAddressInput{
+			AssociationId: assocOut.AssociationId,
+		})
+	})
+
+	descOut, err = ec2c.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+		AllocationIds: []string{*eipOut.AllocationId},
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing DescribeAddresses by AllocationIds: %v", err)
+	}
+	if len(descOut.Addresses) != 1 {
+		t.Fatalf("LocalStack DescribeAddresses by AllocationIds returned %d addresses, want 1", len(descOut.Addresses))
+	}
+	addr := descOut.Addresses[0]
+	if addr.AssociationId == nil || *addr.AssociationId != *assocOut.AssociationId {
+		t.Fatalf("LocalStack DescribeAddresses association = %v, want %s", addr.AssociationId, *assocOut.AssociationId)
+	}
+	if addr.NetworkInterfaceId == nil || *addr.NetworkInterfaceId != *eni.NetworkInterfaceId {
+		t.Fatalf("LocalStack DescribeAddresses ENI = %v, want %s", addr.NetworkInterfaceId, *eni.NetworkInterfaceId)
+	}
+
+	publicIPFilter := "addresses.association.public-ip"
+	eniOut, err := ec2c.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+		Filters: []types.Filter{
+			{
+				Name:   &publicIPFilter,
+				Values: []string{*eipOut.PublicIp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing DescribeNetworkInterfaces filter %s: %v", publicIPFilter, err)
+	}
+	if len(eniOut.NetworkInterfaces) != 1 {
+		t.Fatalf("LocalStack DescribeNetworkInterfaces filter %s=%s returned %d ENIs, want 1",
+			publicIPFilter, *eipOut.PublicIp, len(eniOut.NetworkInterfaces))
+	}
+	if eniOut.NetworkInterfaces[0].NetworkInterfaceId == nil ||
+		*eniOut.NetworkInterfaces[0].NetworkInterfaceId != *eni.NetworkInterfaceId {
+		t.Fatalf("LocalStack DescribeNetworkInterfaces filter %s returned ENI %v, want %s",
+			publicIPFilter, eniOut.NetworkInterfaces[0].NetworkInterfaceId, *eni.NetworkInterfaceId)
+	}
+
+	_, err = ec2c.DisassociateAddress(ctx, &ec2.DisassociateAddressInput{
+		AssociationId: assocOut.AssociationId,
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing DisassociateAddress: %v", err)
+	}
+
+	_, err = ec2c.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: eni.NetworkInterfaceId,
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing DeleteNetworkInterface cleanup: %v", err)
+	}
+
+	_, err = ec2c.ReleaseAddress(ctx, &ec2.ReleaseAddressInput{
+		AllocationId: eipOut.AllocationId,
+	})
+	if err != nil {
+		t.Fatalf("LocalStack capability missing ReleaseAddress cleanup: %v", err)
+	}
 }
 
 // TestIntegration_AlreadyAssociated verifies that Bind returns AlreadyAssociated
