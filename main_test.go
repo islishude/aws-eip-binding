@@ -11,40 +11,85 @@ import (
 )
 
 func TestAWSLoadOptionsForConfig(t *testing.T) {
-	t.Run("IPv4 uses default SDK behavior", func(t *testing.T) {
-		opts := awsLoadOptionsForConfig(&eip.Config{Family: eip.IPFamilyIPv4})
-		if len(opts) != 0 {
-			t.Fatalf("expected no load options, got %d", len(opts))
-		}
-	})
+	tests := []struct {
+		name          string
+		cfg           eip.Config
+		wantOptionLen int
+		wantIMDSMode  ec2imds.EndpointModeState
+		wantDualStack aws.DualStackEndpointState
+	}{
+		{
+			name: "IPv4 uses default SDK behavior",
+			cfg:  eip.Config{Family: eip.IPFamilyIPv4},
+		},
+		{
+			name:          "IPv6 enables IMDS IPv6 and dual-stack service endpoints",
+			cfg:           eip.Config{Family: eip.IPFamilyIPv6},
+			wantOptionLen: 2,
+			wantIMDSMode:  ec2imds.EndpointModeStateIPv6,
+			wantDualStack: aws.DualStackEndpointStateEnabled,
+		},
+	}
 
-	t.Run("IPv6 enables IMDS IPv6 and dual-stack service endpoints", func(t *testing.T) {
-		var loadOptions config.LoadOptions
-		for _, opt := range awsLoadOptionsForConfig(&eip.Config{Family: eip.IPFamilyIPv6}) {
-			if err := opt(&loadOptions); err != nil {
-				t.Fatalf("apply load option: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := awsLoadOptionsForConfig(&tt.cfg)
+			if len(opts) != tt.wantOptionLen {
+				t.Fatalf("load option count = %d, want %d", len(opts), tt.wantOptionLen)
 			}
-		}
+			if tt.wantOptionLen == 0 {
+				return
+			}
 
-		if loadOptions.EC2IMDSEndpointMode != ec2imds.EndpointModeStateIPv6 {
-			t.Errorf("EC2IMDSEndpointMode = %v, want %v", loadOptions.EC2IMDSEndpointMode, ec2imds.EndpointModeStateIPv6)
-		}
-		if loadOptions.UseDualStackEndpoint != aws.DualStackEndpointStateEnabled {
-			t.Errorf("UseDualStackEndpoint = %v, want %v", loadOptions.UseDualStackEndpoint, aws.DualStackEndpointStateEnabled)
-		}
-	})
+			loadOptions := applyLoadOptions(t, opts)
+			if loadOptions.EC2IMDSEndpointMode != tt.wantIMDSMode {
+				t.Errorf("EC2IMDSEndpointMode = %v, want %v", loadOptions.EC2IMDSEndpointMode, tt.wantIMDSMode)
+			}
+			if loadOptions.UseDualStackEndpoint != tt.wantDualStack {
+				t.Errorf("UseDualStackEndpoint = %v, want %v", loadOptions.UseDualStackEndpoint, tt.wantDualStack)
+			}
+		})
+	}
 }
 
 func TestIMDSClientForConfig(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_SERVICE_ENDPOINT", "")
 
-	ipv4Client := imdsClientForConfig(&eip.Config{Family: eip.IPFamilyIPv4})
-	if ipv4Client.Endpoint != eip.IMDSEndpointIPv4 {
-		t.Errorf("IPv4 Endpoint = %q, want %q", ipv4Client.Endpoint, eip.IMDSEndpointIPv4)
+	tests := []struct {
+		name         string
+		cfg          eip.Config
+		wantEndpoint string
+	}{
+		{
+			name:         "IPv4 uses IPv4 metadata endpoint",
+			cfg:          eip.Config{Family: eip.IPFamilyIPv4},
+			wantEndpoint: eip.IMDSEndpointIPv4,
+		},
+		{
+			name:         "IPv6 uses IPv6 metadata endpoint",
+			cfg:          eip.Config{Family: eip.IPFamilyIPv6},
+			wantEndpoint: eip.IMDSEndpointIPv6,
+		},
 	}
 
-	ipv6Client := imdsClientForConfig(&eip.Config{Family: eip.IPFamilyIPv6})
-	if ipv6Client.Endpoint != eip.IMDSEndpointIPv6 {
-		t.Errorf("IPv6 Endpoint = %q, want %q", ipv6Client.Endpoint, eip.IMDSEndpointIPv6)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := imdsClientForConfig(&tt.cfg)
+			if client.Endpoint != tt.wantEndpoint {
+				t.Errorf("Endpoint = %q, want %q", client.Endpoint, tt.wantEndpoint)
+			}
+		})
 	}
+}
+
+func applyLoadOptions(t *testing.T, opts []func(*config.LoadOptions) error) config.LoadOptions {
+	t.Helper()
+
+	var loadOptions config.LoadOptions
+	for _, opt := range opts {
+		if err := opt(&loadOptions); err != nil {
+			t.Fatalf("apply load option: %v", err)
+		}
+	}
+	return loadOptions
 }
