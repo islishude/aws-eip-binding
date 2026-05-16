@@ -19,17 +19,20 @@ Core package code lives under `eip/`. The executable entry point is `main.go`.
 
 ## Common Commands
 
-- Format Go code: `gofmt -w .`
+- Format Go code: `gofmt -w . && go fix ./... && go mod tidy`
 - Run unit tests: `go test ./...`
 - Run one test: `go test ./... -run TestName`
 - Build the CLI: `go build -o aws-eip-binding`
 - Build the container image: `docker build -t aws-eip-binding .`
+- Check Terraform E2E formatting:
+  `terraform -chdir=test/e2e/terraform fmt -recursive -check`
+- Validate Terraform E2E config after provider init:
+  `terraform -chdir=test/e2e/terraform validate`
+- Run Terraform-backed AWS E2E tests:
+  `AWS_REGION=us-east-1 scripts/e2e-terraform.sh`
 
-Integration tests are opt-in and expect a LocalStack-compatible EC2 endpoint:
-
-```sh
-ENABLE_INTEGRATION_TESTS=true AWS_ENDPOINT_URL=http://localhost:4566 go test ./eip -run TestIntegration
-```
+The Terraform E2E test creates real AWS infrastructure and runs the CLI on a
+temporary EC2 instance through SSM. Use an isolated test account or region.
 
 ## Coding Guidelines
 
@@ -47,7 +50,7 @@ ENABLE_INTEGRATION_TESTS=true AWS_ENDPOINT_URL=http://localhost:4566 go test ./e
 - Add or update unit tests for behavioral changes in `eip/` and `main_test.go`.
 - Unit tests should not require real AWS credentials, IMDS access, or networked
   EC2 endpoints.
-- Put LocalStack-dependent coverage behind the existing
-  `ENABLE_INTEGRATION_TESTS=true` gate.
+- Do not add cloud-emulator-dependent tests; use the Terraform-backed AWS E2E
+  harness for EC2/IMDS/IAM behavior.
 - When changing IPv6 behavior, cover subnet CIDR checks, ENI selection, and
   address move/unassign paths.

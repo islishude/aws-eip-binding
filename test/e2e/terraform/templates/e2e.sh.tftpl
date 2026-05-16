@@ -1,0 +1,124 @@
+#!/bin/bash
+set -euo pipefail
+
+log() {
+  printf '[aws-eip-binding-e2e] %s\n' "$*"
+}
+
+export AWS_REGION="${aws_region}"
+export AWS_DEFAULT_REGION="${aws_region}"
+
+ARTIFACT_BUCKET="${artifact_bucket}"
+ARTIFACT_KEY="${artifact_key}"
+ARTIFACT_MD5="${artifact_md5}"
+INSTANCE_ID="${instance_id}"
+PRIMARY_NETWORK_INTERFACE_ID="${primary_network_interface}"
+TARGET_IPV4="${target_ipv4}"
+TARGET_IPV4_ALLOCATION_ID="${target_ipv4_allocation_id}"
+ENABLE_IPV6="${enable_ipv6}"
+TARGET_IPV6="${target_ipv6}"
+BINARY_PATH="/usr/local/bin/aws-eip-binding"
+
+ensure_aws_cli() {
+  if command -v aws >/dev/null 2>&1; then
+    return
+  fi
+
+  log "aws CLI not found; installing via dnf"
+  if ! dnf install -y awscli; then
+    dnf install -y awscli-2
+  fi
+}
+
+cleanup_ipv6() {
+  if [ "$ENABLE_IPV6" != "true" ] || [ -z "$TARGET_IPV6" ]; then
+    return
+  fi
+
+  log "cleanup: unassigning IPv6 $TARGET_IPV6 from $PRIMARY_NETWORK_INTERFACE_ID"
+  aws ec2 unassign-ipv6-addresses \
+    --network-interface-id "$PRIMARY_NETWORK_INTERFACE_ID" \
+    --ipv6-addresses "$TARGET_IPV6" >/dev/null 2>&1 || true
+}
+
+cleanup_ipv4() {
+  local association_id
+  association_id="$(aws ec2 describe-addresses \
+    --allocation-ids "$TARGET_IPV4_ALLOCATION_ID" \
+    --query 'Addresses[0].AssociationId' \
+    --output text 2>/dev/null || true)"
+
+  if [ -n "$association_id" ] && [ "$association_id" != "None" ]; then
+    log "cleanup: disassociating IPv4 association $association_id"
+    aws ec2 disassociate-address --association-id "$association_id" >/dev/null 2>&1 || true
+  fi
+}
+
+on_exit() {
+  local rc=$?
+  log "cleanup starting after rc=$rc"
+  cleanup_ipv6
+  cleanup_ipv4
+  log "cleanup complete"
+  exit "$rc"
+}
+
+trap on_exit EXIT
+
+ensure_aws_cli
+
+log "downloading artifact s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY"
+aws s3 cp "s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" "$BINARY_PATH"
+chmod 0755 "$BINARY_PATH"
+
+actual_md5="$(md5sum "$BINARY_PATH" | awk '{print $1}')"
+if [ "$actual_md5" != "$ARTIFACT_MD5" ]; then
+  log "artifact checksum mismatch: got $actual_md5 want $ARTIFACT_MD5"
+  exit 10
+fi
+
+log "verifying IMDSv2"
+token="$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")"
+metadata_instance_id="$(curl -fsS -H "X-aws-ec2-metadata-token: $token" \
+  "http://169.254.169.254/latest/meta-data/instance-id")"
+if [ "$metadata_instance_id" != "$INSTANCE_ID" ]; then
+  log "IMDS instance-id mismatch: got $metadata_instance_id want $INSTANCE_ID"
+  exit 11
+fi
+
+current_public_ipv4="$(curl -fsS -H "X-aws-ec2-metadata-token: $token" \
+  "http://169.254.169.254/latest/meta-data/public-ipv4")"
+log "current public IPv4 before bind: $current_public_ipv4"
+
+log "binding IPv4 target $TARGET_IPV4"
+"$BINARY_PATH" "$TARGET_IPV4"
+
+bound_eni="$(aws ec2 describe-addresses \
+  --allocation-ids "$TARGET_IPV4_ALLOCATION_ID" \
+  --query 'Addresses[0].NetworkInterfaceId' \
+  --output text)"
+if [ "$bound_eni" != "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+  log "IPv4 target associated with ENI $bound_eni, want $PRIMARY_NETWORK_INTERFACE_ID"
+  exit 12
+fi
+log "IPv4 target associated with primary ENI $PRIMARY_NETWORK_INTERFACE_ID"
+
+if [ "$ENABLE_IPV6" = "true" ]; then
+  log "binding IPv6 target $TARGET_IPV6"
+  "$BINARY_PATH" "$TARGET_IPV6"
+
+  ipv6_eni="$(aws ec2 describe-network-interfaces \
+    --filters "Name=ipv6-addresses.ipv6-address,Values=$TARGET_IPV6" \
+    --query 'NetworkInterfaces[0].NetworkInterfaceId' \
+    --output text)"
+  if [ "$ipv6_eni" != "$PRIMARY_NETWORK_INTERFACE_ID" ]; then
+    log "IPv6 target assigned to ENI $ipv6_eni, want $PRIMARY_NETWORK_INTERFACE_ID"
+    exit 13
+  fi
+  log "IPv6 target assigned to primary ENI $PRIMARY_NETWORK_INTERFACE_ID"
+else
+  log "IPv6 scenario disabled"
+fi
+
+log "E2E completed successfully"

@@ -50,12 +50,7 @@ This CLI tool associates an IPv4 Elastic IP (EIP), or moves a specified IPv6 add
 
 `ec2:DescribeNetworkInterfaces` should be validated against the
 [AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html)
-or an opt-in test in a real AWS account. LocalStack can exercise the EC2 API
-state flow, but it is not the authority for this permission: LocalStack
-[IAM policy enforcement](https://docs.localstack.cloud/aws/capabilities/security-testing/iam-policy-enforcement/)
-is disabled by default and its
-[IAM coverage](https://docs.localstack.cloud/aws/capabilities/security-testing/iam-coverage/)
-does not verify every EC2 action.
+or the Terraform-backed E2E test in a real AWS account.
 
 ## Testing
 
@@ -65,36 +60,31 @@ Run unit tests with:
 go test ./...
 ```
 
-Run the LocalStack-backed integration suite with:
+Check the Terraform E2E harness with:
 
 ```sh
-ENABLE_INTEGRATION_TESTS=true AWS_ENDPOINT_URL=http://localhost:4566 go test ./... -run TestIntegration
+terraform -chdir=test/e2e/terraform fmt -recursive -check
+terraform -chdir=test/e2e/terraform init
+terraform -chdir=test/e2e/terraform validate
 ```
 
-These tests cover IPv4 EIP behavior against LocalStack, including a capability
-probe for the EC2 APIs and filters this tool depends on, plus a CLI-level run
-against a test IMDS endpoint. They do not validate IAM least-privilege policy or
-IPv6 behavior.
-
-Run read-only real AWS E2E checks from an EC2 instance with:
+Run the Terraform-backed AWS E2E suite with:
 
 ```sh
-ENABLE_AWS_E2E_TESTS=true go test ./... -run TestAWSE2E
+AWS_REGION=us-east-1 scripts/e2e-terraform.sh
 ```
 
-The AWS E2E tests are skipped by default. With only `ENABLE_AWS_E2E_TESTS=true`,
-they verify real IMDSv2 access and `DescribeNetworkInterfaces` filters for the
-current instance. Mutating bind tests require explicit targets:
+The E2E harness builds a Linux amd64 binary, uploads it to a temporary S3
+bucket, creates a disposable VPC and Amazon Linux 2023 EC2 instance, and uses
+SSM to run the CLI inside the instance. It validates real IMDSv2, the instance
+IAM role, IPv4 EIP association, and IPv6 address assignment. Set
+`E2E_ENABLE_IPV6=false` to run only the IPv4 scenario.
 
-```sh
-ENABLE_AWS_E2E_TESTS=true AWS_E2E_TARGET_IPV4=203.0.113.10 go test ./eip -run TestAWSE2E_BindTargetIPv4
-ENABLE_AWS_E2E_TESTS=true AWS_E2E_TARGET_IPV6=2001:db8::10 go test ./eip -run TestAWSE2E_BindTargetIPv6
-```
-
-Only run mutating AWS E2E tests on a disposable EC2 instance or isolated account:
-they can move, assign, or unassign addresses and change the instance's public
-entry point. IPv6 E2E is skipped when the primary ENI subnet has no IPv6 CIDR
-block.
+Only run E2E tests in a disposable AWS account or isolated region. Terraform
+creates real infrastructure that can incur short-lived EC2, EIP, S3, and VPC
+endpoint charges. `terraform test` attempts to destroy test infrastructure when
+it finishes, but you should still monitor cleanup and remove leftover resources
+manually if a run is interrupted.
 
 ### Using POD_NAME Argument
 
