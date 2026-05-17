@@ -22,3 +22,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  - package-ecosystem: "terraform"
+    directory: "test/e2e/terraform"
+    schedule:
+      interval: "monthly"
