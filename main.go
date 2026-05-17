@@ -65,15 +65,12 @@ func awsLoadOptionsForConfig(cfg *eip.Config) []func(*config.LoadOptions) error 
 }
 
 func imdsClientOptionsForConfig(cfg *eip.Config) []func(*ec2imds.Options) {
-	opts := []func(*ec2imds.Options){
+	if cfg.Family != eip.IPFamilyIPv6 {
+		return nil
+	}
+	return []func(*ec2imds.Options){
 		func(o *ec2imds.Options) {
-			o.EnableFallback = aws.BoolTernary(false)
+			o.EndpointMode = ec2imds.EndpointModeStateIPv6
 		},
 	}
-	if cfg.Family == eip.IPFamilyIPv6 {
-		opts = append(opts, func(o *ec2imds.Options) {
-			o.EndpointMode = ec2imds.EndpointModeStateIPv6
-		})
-	}
-	return opts
 }

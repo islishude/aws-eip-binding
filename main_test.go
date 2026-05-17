@@ -60,14 +60,14 @@ func TestIMDSClientOptionsForConfig(t *testing.T) {
 		wantEndpointMode ec2imds.EndpointModeState
 	}{
 		{
-			name:          "IPv4 disables IMDSv1 fallback",
+			name:          "IPv4 uses default SDK IMDS options",
 			cfg:           eip.Config{Family: eip.IPFamilyIPv4},
-			wantOptionLen: 1,
+			wantOptionLen: 0,
 		},
 		{
-			name:             "IPv6 selects IPv6 endpoint mode and disables IMDSv1 fallback",
+			name:             "IPv6 selects IPv6 endpoint mode",
 			cfg:              eip.Config{Family: eip.IPFamilyIPv6},
-			wantOptionLen:    2,
+			wantOptionLen:    1,
 			wantEndpointMode: ec2imds.EndpointModeStateIPv6,
 		},
 	}
@@ -80,9 +80,6 @@ func TestIMDSClientOptionsForConfig(t *testing.T) {
 			}
 
 			imdsOptions := applyIMDSClientOptions(opts)
-			if imdsOptions.EnableFallback != aws.BoolTernary(false) {
-				t.Errorf("EnableFallback = %v, want %v", imdsOptions.EnableFallback, aws.BoolTernary(false))
-			}
 			if imdsOptions.EndpointMode != tt.wantEndpointMode {
 				t.Errorf("EndpointMode = %v, want %v", imdsOptions.EndpointMode, tt.wantEndpointMode)
 			}

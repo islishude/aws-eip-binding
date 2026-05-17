@@ -28,7 +28,7 @@ sequenceDiagram
     participant Config as eip.ParseConfig
     participant AWSConfig as AWS SDK config
     participant Binder as eip.Binder
-    participant IMDS as EC2 IMDSv2
+    participant IMDS as EC2 IMDS
     participant EC2 as EC2 API
 
     User->>CLI: Run with IP or POD_NAME
@@ -46,7 +46,7 @@ sequenceDiagram
 
     alt IPv4 target
         Binder->>EC2: DescribeAddresses(public IP)
-        Binder->>IMDS: Get token and instance-id
+        Binder->>IMDS: Get instance-id
         Binder->>EC2: DescribeNetworkInterfaces(primary ENI filters)
         alt Target already on primary ENI
             Binder-->>CLI: AlreadyAssociated result
@@ -55,7 +55,7 @@ sequenceDiagram
             Binder-->>CLI: Association result
         end
     else IPv6 target
-        Binder->>IMDS: Get token and instance-id
+        Binder->>IMDS: Get instance-id
         Binder->>EC2: DescribeNetworkInterfaces(primary ENI filters)
         alt Target already on primary ENI
             Binder-->>CLI: AlreadyAssociated result
@@ -75,7 +75,9 @@ sequenceDiagram
 
 ## Prerequisites
 
-1. You're using IMDSv2
+1. EC2 instance metadata is available. The AWS SDK uses IMDSv2 when available
+   and remains compatible with IMDSv1 fallback unless IMDSv1 is disabled in
+   AWS SDK configuration.
 
 2. For IPv6 targets, the instance must support the IMDS IPv6 endpoint (`http://[fd00:ec2::254]`) and EC2 dual-stack service endpoints. The IMDS endpoint can still be overridden with `AWS_EC2_METADATA_SERVICE_ENDPOINT` for custom environments.
 
