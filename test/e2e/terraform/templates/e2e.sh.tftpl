@@ -10,7 +10,7 @@ export AWS_DEFAULT_REGION="${aws_region}"
 
 ARTIFACT_BUCKET="${artifact_bucket}"
 ARTIFACT_KEY="${artifact_key}"
-ARTIFACT_MD5="${artifact_md5}"
+ARTIFACT_SHA256="${artifact_sha256}"
 INSTANCE_ID="${instance_id}"
 PRIMARY_NETWORK_INTERFACE_ID="${primary_network_interface}"
 PREVIOUS_NETWORK_INTERFACE_ID="${previous_network_interface}"
@@ -139,9 +139,9 @@ log "downloading artifact s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY"
 aws s3 cp "s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" "$BINARY_PATH"
 chmod 0755 "$BINARY_PATH"
 
-actual_md5="$(md5sum "$BINARY_PATH" | awk '{print $1}')"
-if [ "$actual_md5" != "$ARTIFACT_MD5" ]; then
-  log "artifact checksum mismatch: got $actual_md5 want $ARTIFACT_MD5"
+actual_sha256="$(sha256sum "$BINARY_PATH" | awk '{print $1}')"
+if [ "$actual_sha256" != "$ARTIFACT_SHA256" ]; then
+  log "artifact checksum mismatch: got $actual_sha256 want $ARTIFACT_SHA256"
   exit 10
 fi
 

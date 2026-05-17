@@ -12,7 +12,7 @@ locals {
   e2e_script = templatefile("${path.module}/templates/e2e.sh.tftpl", {
     artifact_bucket            = aws_s3_bucket.artifacts.bucket
     artifact_key               = aws_s3_object.binary.key
-    artifact_md5               = filemd5(var.binary_path)
+    artifact_sha256            = filesha256(var.binary_path)
     aws_region                 = var.aws_region
     enable_ipv6                = var.enable_ipv6
     instance_id                = aws_instance.runner.id
