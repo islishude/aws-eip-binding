@@ -38,8 +38,10 @@ echo "[e2e] initializing Terraform in $TF_DIR"
 terraform -chdir="$TF_DIR" init
 
 echo "[e2e] running Terraform E2E test in $AWS_REGION with prefix $E2E_NAME_PREFIX"
-terraform -chdir="$TF_DIR" test \
-  -var="aws_region=$AWS_REGION" \
-  -var="binary_path=$ARTIFACT" \
-  -var="name_prefix=$E2E_NAME_PREFIX" \
-  -var="enable_ipv6=$E2E_ENABLE_IPV6"
+terraform_vars=(
+  "-var=aws_region=$AWS_REGION"
+  "-var=binary_path=$ARTIFACT"
+  "-var=name_prefix=$E2E_NAME_PREFIX"
+  "-var=enable_ipv6=$E2E_ENABLE_IPV6"
+)
+terraform -chdir="$TF_DIR" test -verbose "${terraform_vars[@]}"
