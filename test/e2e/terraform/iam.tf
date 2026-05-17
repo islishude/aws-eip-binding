@@ -40,9 +40,14 @@ resource "aws_iam_role_policy" "runner" {
           "ec2:DescribeAddresses",
           "ec2:DescribeNetworkInterfaces",
           "ec2:DescribeSubnets",
-          "ec2:DisassociateAddress",
           "ec2:UnassignIpv6Addresses",
         ]
+        Resource = "*"
+      },
+      {
+        Sid      = "CleanupIPv4Address"
+        Effect   = "Allow"
+        Action   = "ec2:DisassociateAddress"
         Resource = "*"
       },
       {

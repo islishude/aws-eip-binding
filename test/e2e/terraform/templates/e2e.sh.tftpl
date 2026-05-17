@@ -155,10 +155,6 @@ if [ "$metadata_instance_id" != "$INSTANCE_ID" ]; then
   exit 11
 fi
 
-current_public_ipv4="$(curl -fsS -H "X-aws-ec2-metadata-token: $token" \
-  "http://169.254.169.254/latest/meta-data/public-ipv4")"
-log "current public IPv4 before bind: $current_public_ipv4"
-
 prepare_ipv4_previous_owner
 
 log "binding IPv4 target $TARGET_IPV4"

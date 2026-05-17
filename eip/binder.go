@@ -73,13 +73,13 @@ func parseTargetAddr(targetIP string) (netip.Addr, error) {
 	return addr.Unmap(), nil
 }
 
-func (b *Binder) getMetadataTokenAndInstanceID() (string, string, error) {
-	mdToken, err := b.IMDS.GetToken()
+func (b *Binder) getMetadataTokenAndInstanceID(ctx context.Context) (string, string, error) {
+	mdToken, err := b.IMDS.GetToken(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("get metadata token: %w", err)
 	}
 
-	instanceID, err := b.IMDS.GetMetadata(mdToken, "meta-data/instance-id")
+	instanceID, err := b.IMDS.GetMetadata(ctx, mdToken, "meta-data/instance-id")
 	if err != nil {
 		return "", "", fmt.Errorf("get instance-id: %w", err)
 	}
@@ -100,64 +100,41 @@ func (b *Binder) bindIPv4(ctx context.Context, targetIP string) (*BindResult, er
 	}
 	address := descOut.Addresses[0]
 
-	// 2. Get instance metadata.
-	mdToken, instanceID, err := b.getMetadataTokenAndInstanceID()
+	// 2. Get instance metadata and current primary ENI.
+	_, instanceID, err := b.getMetadataTokenAndInstanceID(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	instancePublicIP, err := b.IMDS.GetMetadata(mdToken, "meta-data/public-ipv4")
+	primaryENI, err := b.findPrimaryNetworkInterface(ctx, instanceID)
 	if err != nil {
-		return nil, fmt.Errorf("get public-ipv4: %w", err)
+		return nil, err
+	}
+	networkInterfaceID := primaryENI.NetworkInterfaceId
+	if networkInterfaceID == nil {
+		return nil, fmt.Errorf("primary network interface for instance %s has no ID", instanceID)
 	}
 
-	// 3. Already associated – nothing to do.
-	if targetIP == instancePublicIP {
+	// 3. Already associated - nothing to do.
+	if address.NetworkInterfaceId != nil && *address.NetworkInterfaceId == *networkInterfaceID {
 		b.Logger.Printf("EIP %s is already associated with instance %s", targetIP, instanceID)
 		return &BindResult{
-			AlreadyAssociated: true,
-			InstanceID:        instanceID,
-			Family:            IPFamilyIPv4,
-			TargetIP:          targetIP,
+			AlreadyAssociated:  true,
+			InstanceID:         instanceID,
+			Family:             IPFamilyIPv4,
+			TargetIP:           targetIP,
+			NetworkInterfaceID: *networkInterfaceID,
 		}, nil
 	}
-
-	// 4. Disassociate from previous instance if needed.
-	if address.AssociationId != nil {
-		b.Logger.Printf("Disassociating EIP from previous association %s", *address.AssociationId)
-		_, err = b.EC2.DisassociateAddress(ctx, &ec2.DisassociateAddressInput{
-			AssociationId: address.AssociationId,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("disassociate EIP %s: %w", targetIP, err)
-		}
+	if address.AllocationId == nil {
+		return nil, fmt.Errorf("address %s has no allocation ID", targetIP)
 	}
 
-	// 5. Find the network interface and associate.
-	eniOut, err := b.EC2.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
-		Filters: []types.Filter{
-			{
-				Name:   new("addresses.association.public-ip"),
-				Values: []string{instancePublicIP},
-			},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("describe network interfaces for %s: %w", instancePublicIP, err)
-	}
-	if len(eniOut.NetworkInterfaces) == 0 {
-		return nil, fmt.Errorf("no network interface found for public IP %s", instancePublicIP)
-	}
-
-	networkInterfaceID := eniOut.NetworkInterfaces[0].NetworkInterfaceId
-	if networkInterfaceID == nil {
-		return nil, fmt.Errorf("network interface for public IP %s has no ID", instancePublicIP)
-	}
 	b.Logger.Printf("Associating EIP %s (allocation=%s) to ENI %s on instance %s",
 		targetIP, *address.AllocationId, *networkInterfaceID, instanceID)
 
 	assocOut, err := b.EC2.AssociateAddress(ctx, &ec2.AssociateAddressInput{
 		AllocationId:       address.AllocationId,
+		AllowReassociation: new(true),
 		NetworkInterfaceId: networkInterfaceID,
 	})
 	if err != nil {
@@ -183,7 +160,7 @@ func (b *Binder) bindIPv4(ctx context.Context, targetIP string) (*BindResult, er
 func (b *Binder) bindIPv6(ctx context.Context, targetAddr netip.Addr) (*BindResult, error) {
 	targetIP := targetAddr.String()
 
-	_, instanceID, err := b.getMetadataTokenAndInstanceID()
+	_, instanceID, err := b.getMetadataTokenAndInstanceID(ctx)
 	if err != nil {
 		return nil, err
 	}

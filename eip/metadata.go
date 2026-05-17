@@ -1,15 +1,18 @@
 package eip
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
 	IMDSEndpointIPv4 = "http://169.254.169.254"
 	IMDSEndpointIPv6 = "http://[fd00:ec2::254]"
+	IMDSTimeout      = 2 * time.Second
 
 	awsEC2MetadataServiceEndpointEnv = "AWS_EC2_METADATA_SERVICE_ENDPOINT"
 )
@@ -56,9 +59,9 @@ func WithIMDSEndpointMode(mode IMDSEndpointMode) IMDSClientOption {
 // MetadataClient abstracts EC2 instance metadata retrieval.
 type MetadataClient interface {
 	// GetToken fetches an IMDSv2 session token.
-	GetToken() (string, error)
+	GetToken(ctx context.Context) (string, error)
 	// GetMetadata retrieves metadata at the given path using the provided token.
-	GetMetadata(token, path string) (string, error)
+	GetMetadata(ctx context.Context, token, path string) (string, error)
 }
 
 // IMDSClient implements MetadataClient using the EC2 Instance Metadata Service v2.
@@ -72,7 +75,7 @@ type IMDSClient struct {
 // NewIMDSClient creates a new IMDSClient with default settings.
 func NewIMDSClient(optFns ...IMDSClientOption) *IMDSClient {
 	opts := imdsClientOptions{
-		httpClient:   http.DefaultClient,
+		httpClient:   &http.Client{Timeout: IMDSTimeout},
 		endpointMode: IMDSEndpointModeIPv4,
 	}
 	for _, fn := range optFns {
@@ -87,7 +90,7 @@ func NewIMDSClient(optFns ...IMDSClientOption) *IMDSClient {
 		endpoint = opts.endpoint
 	}
 	if opts.httpClient == nil {
-		opts.httpClient = http.DefaultClient
+		opts.httpClient = &http.Client{Timeout: IMDSTimeout}
 	}
 
 	return &IMDSClient{
@@ -104,8 +107,8 @@ func defaultIMDSEndpoint(mode IMDSEndpointMode) string {
 }
 
 // GetToken fetches an IMDSv2 token from the EC2 metadata service.
-func (c *IMDSClient) GetToken() (string, error) {
-	req, err := http.NewRequest(http.MethodPut, c.Endpoint+"/latest/api/token", nil)
+func (c *IMDSClient) GetToken(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.Endpoint+"/latest/api/token", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -129,8 +132,8 @@ func (c *IMDSClient) GetToken() (string, error) {
 }
 
 // GetMetadata retrieves metadata from EC2 instance by providing the token and metadata path.
-func (c *IMDSClient) GetMetadata(token, path string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, c.Endpoint+"/latest/"+path, nil)
+func (c *IMDSClient) GetMetadata(ctx context.Context, token, path string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/latest/"+path, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create metadata request: %w", err)
 	}

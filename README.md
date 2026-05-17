@@ -47,15 +47,11 @@ sequenceDiagram
     alt IPv4 target
         Binder->>EC2: DescribeAddresses(public IP)
         Binder->>IMDS: Get token and instance-id
-        Binder->>IMDS: Get current public-ipv4
-        alt Target already on this instance
+        Binder->>EC2: DescribeNetworkInterfaces(primary ENI filters)
+        alt Target already on primary ENI
             Binder-->>CLI: AlreadyAssociated result
         else Target is elsewhere
-            opt Existing EIP association
-                Binder->>EC2: DisassociateAddress(previous association)
-            end
-            Binder->>EC2: DescribeNetworkInterfaces(public-ip filter)
-            Binder->>EC2: AssociateAddress(allocation, current ENI)
+            Binder->>EC2: AssociateAddress(allocation, primary ENI, allow reassociation)
             Binder-->>CLI: Association result
         end
     else IPv6 target
@@ -98,7 +94,6 @@ sequenceDiagram
         "ec2:DescribeNetworkInterfaces",
         "ec2:DescribeSubnets",
         "ec2:DescribeTags",
-        "ec2:DisassociateAddress",
         "ec2:UnassignIpv6Addresses"
       ],
       "Resource": "*"
@@ -200,7 +195,7 @@ bucket, creates a disposable VPC, an Amazon Linux 2023 EC2 instance, and a
 standalone ENI used as the previous address owner. SSM runs the CLI inside the
 instance after pre-associating the target EIP and, when enabled, pre-assigning
 the target IPv6 address to that previous-owner ENI. The test validates real
-IMDSv2, the instance IAM role, IPv4 EIP disassociation and reassociation, and
+IMDSv2, the instance IAM role, automatic IPv4 EIP reassociation, and
 IPv6 unassign-and-move behavior. Set `E2E_ENABLE_IPV6=false` to run only the
 IPv4 scenario.
 

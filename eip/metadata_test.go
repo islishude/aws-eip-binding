@@ -1,6 +1,7 @@
 package eip
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,7 +44,7 @@ func TestIMDSClientGetToken(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 
-			token, err := client.GetToken()
+			token, err := client.GetToken(context.Background())
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -115,7 +116,7 @@ func TestIMDSClientGetMetadata(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 
-			got, err := client.GetMetadata(tt.token, tt.path)
+			got, err := client.GetMetadata(context.Background(), tt.token, tt.path)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -187,6 +188,9 @@ func TestNewIMDSClientEndpointSelection(t *testing.T) {
 			}
 			if client.HTTPClient == nil {
 				t.Fatal("HTTPClient is nil")
+			}
+			if client.HTTPClient.Timeout != IMDSTimeout {
+				t.Errorf("HTTPClient.Timeout = %s, want %s", client.HTTPClient.Timeout, IMDSTimeout)
 			}
 		})
 	}

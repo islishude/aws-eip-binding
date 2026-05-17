@@ -13,7 +13,6 @@ import (
 )
 
 type describeAddressesFunc func(*ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error)
-type disassociateAddressFunc func(*ec2.DisassociateAddressInput) (*ec2.DisassociateAddressOutput, error)
 type describeNetworkInterfacesFunc func(*ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error)
 type associateAddressFunc func(*ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error)
 type assignIPv6AddressesFunc func(*ec2.AssignIpv6AddressesInput) (*ec2.AssignIpv6AddressesOutput, error)
@@ -26,7 +25,6 @@ type fakeEC2 struct {
 	calls []string
 
 	describeAddresses         describeAddressesFunc
-	disassociateAddress       disassociateAddressFunc
 	describeNetworkInterfaces []describeNetworkInterfacesFunc
 	associateAddress          associateAddressFunc
 	assignIPv6Addresses       assignIPv6AddressesFunc
@@ -47,16 +45,6 @@ func (f *fakeEC2) DescribeAddresses(_ context.Context, in *ec2.DescribeAddresses
 		return nil, nil
 	}
 	return f.describeAddresses(in)
-}
-
-func (f *fakeEC2) DisassociateAddress(_ context.Context, in *ec2.DisassociateAddressInput, _ ...func(*ec2.Options)) (*ec2.DisassociateAddressOutput, error) {
-	f.t.Helper()
-	f.record("DisassociateAddress")
-	if f.disassociateAddress == nil {
-		f.unexpected("DisassociateAddress")
-		return nil, nil
-	}
-	return f.disassociateAddress(in)
 }
 
 func (f *fakeEC2) DescribeNetworkInterfaces(_ context.Context, in *ec2.DescribeNetworkInterfacesInput, _ ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
@@ -150,13 +138,13 @@ func newFakeIMDS(t *testing.T, metadata map[string]string) *fakeIMDS {
 	}
 }
 
-func (f *fakeIMDS) GetToken() (string, error) {
+func (f *fakeIMDS) GetToken(_ context.Context) (string, error) {
 	f.t.Helper()
 	f.calls = append(f.calls, "GetToken")
 	return f.token, f.tokenErr
 }
 
-func (f *fakeIMDS) GetMetadata(token, path string) (string, error) {
+func (f *fakeIMDS) GetMetadata(_ context.Context, token, path string) (string, error) {
 	f.t.Helper()
 	f.calls = append(f.calls, "GetMetadata:"+path)
 	if token != f.token {
@@ -266,6 +254,16 @@ func requireStringPtr(t *testing.T, got *string, want string, label string) {
 	}
 }
 
+func requireBoolPtr(t *testing.T, got *bool, want bool, label string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s is nil, want %v", label, want)
+	}
+	if *got != want {
+		t.Fatalf("%s = %v, want %v", label, *got, want)
+	}
+}
+
 func requireFilter(t *testing.T, filters []types.Filter, name string, values ...string) {
 	t.Helper()
 	for _, filter := range filters {
@@ -281,11 +279,6 @@ func requireFilter(t *testing.T, filters []types.Filter, name string, values ...
 func requireDescribeAddressInput(t *testing.T, in *ec2.DescribeAddressesInput, targetIP string) {
 	t.Helper()
 	requireStrings(t, in.PublicIps, []string{targetIP}, "PublicIps")
-}
-
-func requireCurrentIPv4ENIFilter(t *testing.T, in *ec2.DescribeNetworkInterfacesInput, currentIP string) {
-	t.Helper()
-	requireFilter(t, in.Filters, "addresses.association.public-ip", currentIP)
 }
 
 func requirePrimaryENIFilters(t *testing.T, in *ec2.DescribeNetworkInterfacesInput, instanceID string) {
@@ -311,17 +304,9 @@ func instanceMetadata(instanceID string) map[string]string {
 	}
 }
 
-func ipv4Metadata(instanceID, publicIP string) map[string]string {
-	return map[string]string{
-		"meta-data/instance-id": instanceID,
-		"meta-data/public-ipv4": publicIP,
-	}
-}
-
 func TestBindIPv4Scenarios(t *testing.T) {
 	const (
 		targetIP   = "54.162.153.80"
-		currentIP  = "10.0.0.1"
 		instanceID = "i-ipv4"
 		allocation = "eipalloc-111"
 	)
@@ -340,23 +325,75 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				ec2Fake := newFakeEC2(t)
 				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
 					requireDescribeAddressInput(t, in, targetIP)
+					address := elasticAddress(targetIP, allocation, "")
+					address.NetworkInterfaceId = new("eni-primary")
 					return &ec2.DescribeAddressesOutput{
-						Addresses: []types.Address{elasticAddress(targetIP, allocation, "")},
+						Addresses: []types.Address{address},
 					}, nil
 				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, targetIP))
+				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
+					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+						requirePrimaryENIFilters(t, in, instanceID)
+						return &ec2.DescribeNetworkInterfacesOutput{
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
+						}, nil
+					},
+				}
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
 			},
 			wantResult: &BindResult{
-				AlreadyAssociated: true,
-				InstanceID:        instanceID,
-				Family:            IPFamilyIPv4,
-				TargetIP:          targetIP,
+				AlreadyAssociated:  true,
+				InstanceID:         instanceID,
+				Family:             IPFamilyIPv4,
+				TargetIP:           targetIP,
+				NetworkInterfaceID: "eni-primary",
 			},
-			wantEC2Calls: []string{"DescribeAddresses"},
+			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
 				"GetToken",
 				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
+			},
+		},
+		{
+			name: "reassociates from secondary ENI on same instance",
+			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
+				ec2Fake := newFakeEC2(t)
+				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
+					requireDescribeAddressInput(t, in, targetIP)
+					address := elasticAddress(targetIP, allocation, "eipassoc-secondary")
+					address.InstanceId = new(instanceID)
+					address.NetworkInterfaceId = new("eni-secondary")
+					return &ec2.DescribeAddressesOutput{
+						Addresses: []types.Address{address},
+					}, nil
+				}
+				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
+					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+						requirePrimaryENIFilters(t, in, instanceID)
+						return &ec2.DescribeNetworkInterfacesOutput{
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
+						}, nil
+					},
+				}
+				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
+					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
+					requireBoolPtr(t, in.AllowReassociation, true, "AllowReassociation")
+					requireStringPtr(t, in.NetworkInterfaceId, "eni-primary", "NetworkInterfaceId")
+					return &ec2.AssociateAddressOutput{AssociationId: new("eipassoc-primary")}, nil
+				}
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
+			},
+			wantResult: &BindResult{
+				AssociationID:      "eipassoc-primary",
+				InstanceID:         instanceID,
+				Family:             IPFamilyIPv4,
+				TargetIP:           targetIP,
+				NetworkInterfaceID: "eni-primary",
+			},
+			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
+			wantIMDSCalls: []string{
+				"GetToken",
+				"GetMetadata:meta-data/instance-id",
 			},
 		},
 		{
@@ -371,74 +408,72 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				}
 				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
 					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
-						requireCurrentIPv4ENIFilter(t, in, currentIP)
+						requirePrimaryENIFilters(t, in, instanceID)
 						return &ec2.DescribeNetworkInterfacesOutput{
-							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-current")},
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
 						}, nil
 					},
 				}
 				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
-					requireStringPtr(t, in.NetworkInterfaceId, "eni-current", "NetworkInterfaceId")
+					requireBoolPtr(t, in.AllowReassociation, true, "AllowReassociation")
+					requireStringPtr(t, in.NetworkInterfaceId, "eni-primary", "NetworkInterfaceId")
 					return &ec2.AssociateAddressOutput{AssociationId: new("eipassoc-new")}, nil
 				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
 			},
 			wantResult: &BindResult{
 				AssociationID:      "eipassoc-new",
 				InstanceID:         instanceID,
 				Family:             IPFamilyIPv4,
 				TargetIP:           targetIP,
-				NetworkInterfaceID: "eni-current",
+				NetworkInterfaceID: "eni-primary",
 			},
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
 				"GetToken",
 				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
 			},
 		},
 		{
-			name: "disassociates existing address before associating",
+			name: "reassociates existing address without explicit disassociate",
 			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
 				ec2Fake := newFakeEC2(t)
 				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
 					requireDescribeAddressInput(t, in, targetIP)
+					address := elasticAddress(targetIP, allocation, "eipassoc-old")
+					address.NetworkInterfaceId = new("eni-old")
 					return &ec2.DescribeAddressesOutput{
-						Addresses: []types.Address{elasticAddress(targetIP, allocation, "eipassoc-old")},
+						Addresses: []types.Address{address},
 					}, nil
-				}
-				ec2Fake.disassociateAddress = func(in *ec2.DisassociateAddressInput) (*ec2.DisassociateAddressOutput, error) {
-					requireStringPtr(t, in.AssociationId, "eipassoc-old", "AssociationId")
-					return &ec2.DisassociateAddressOutput{}, nil
 				}
 				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
 					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
-						requireCurrentIPv4ENIFilter(t, in, currentIP)
+						requirePrimaryENIFilters(t, in, instanceID)
 						return &ec2.DescribeNetworkInterfacesOutput{
-							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-current")},
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
 						}, nil
 					},
 				}
 				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
-					requireStringPtr(t, in.NetworkInterfaceId, "eni-current", "NetworkInterfaceId")
+					requireBoolPtr(t, in.AllowReassociation, true, "AllowReassociation")
+					requireStringPtr(t, in.NetworkInterfaceId, "eni-primary", "NetworkInterfaceId")
 					return &ec2.AssociateAddressOutput{AssociationId: new("eipassoc-new")}, nil
 				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
 			},
 			wantResult: &BindResult{
 				AssociationID:      "eipassoc-new",
 				InstanceID:         instanceID,
 				Family:             IPFamilyIPv4,
 				TargetIP:           targetIP,
-				NetworkInterfaceID: "eni-current",
+				NetworkInterfaceID: "eni-primary",
 			},
-			wantEC2Calls: []string{"DescribeAddresses", "DisassociateAddress", "DescribeNetworkInterfaces", "AssociateAddress"},
+			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
 				"GetToken",
 				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
 			},
 		},
 		{
@@ -511,31 +546,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			},
 		},
 		{
-			name: "public IPv4 metadata error",
-			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
-				ec2Fake := newFakeEC2(t)
-				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
-					requireDescribeAddressInput(t, in, targetIP)
-					return &ec2.DescribeAddressesOutput{
-						Addresses: []types.Address{elasticAddress(targetIP, allocation, "")},
-					}, nil
-				}
-				imdsFake := newFakeIMDS(t, instanceMetadata(instanceID))
-				imdsFake.metadataErr = map[string]error{
-					"meta-data/public-ipv4": errors.New("public ip unavailable"),
-				}
-				return ec2Fake, imdsFake
-			},
-			wantErr:      true,
-			wantEC2Calls: []string{"DescribeAddresses"},
-			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
-			},
-		},
-		{
-			name: "no network interface for current public IP",
+			name: "no primary network interface",
 			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
 				ec2Fake := newFakeEC2(t)
 				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
@@ -546,18 +557,44 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				}
 				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
 					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
-						requireCurrentIPv4ENIFilter(t, in, currentIP)
+						requirePrimaryENIFilters(t, in, instanceID)
 						return &ec2.DescribeNetworkInterfacesOutput{}, nil
 					},
 				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
 			},
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
 				"GetToken",
 				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
+			},
+		},
+		{
+			name: "address has no allocation ID",
+			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
+				ec2Fake := newFakeEC2(t)
+				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
+					requireDescribeAddressInput(t, in, targetIP)
+					return &ec2.DescribeAddressesOutput{
+						Addresses: []types.Address{{PublicIp: new(targetIP)}},
+					}, nil
+				}
+				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
+					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+						requirePrimaryENIFilters(t, in, instanceID)
+						return &ec2.DescribeNetworkInterfacesOutput{
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
+						}, nil
+					},
+				}
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
+			},
+			wantErr:      true,
+			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
+			wantIMDSCalls: []string{
+				"GetToken",
+				"GetMetadata:meta-data/instance-id",
 			},
 		},
 		{
@@ -572,49 +609,25 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				}
 				ec2Fake.describeNetworkInterfaces = []describeNetworkInterfacesFunc{
 					func(in *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
-						requireCurrentIPv4ENIFilter(t, in, currentIP)
+						requirePrimaryENIFilters(t, in, instanceID)
 						return &ec2.DescribeNetworkInterfacesOutput{
-							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-current")},
+							NetworkInterfaces: []types.NetworkInterface{networkInterface("eni-primary")},
 						}, nil
 					},
 				}
 				ec2Fake.associateAddress = func(in *ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 					requireStringPtr(t, in.AllocationId, allocation, "AllocationId")
-					requireStringPtr(t, in.NetworkInterfaceId, "eni-current", "NetworkInterfaceId")
+					requireBoolPtr(t, in.AllowReassociation, true, "AllowReassociation")
+					requireStringPtr(t, in.NetworkInterfaceId, "eni-primary", "NetworkInterfaceId")
 					return nil, errors.New("permission denied")
 				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
+				return ec2Fake, newFakeIMDS(t, instanceMetadata(instanceID))
 			},
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
 				"GetToken",
 				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
-			},
-		},
-		{
-			name: "disassociate error",
-			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
-				ec2Fake := newFakeEC2(t)
-				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
-					requireDescribeAddressInput(t, in, targetIP)
-					return &ec2.DescribeAddressesOutput{
-						Addresses: []types.Address{elasticAddress(targetIP, allocation, "eipassoc-old")},
-					}, nil
-				}
-				ec2Fake.disassociateAddress = func(in *ec2.DisassociateAddressInput) (*ec2.DisassociateAddressOutput, error) {
-					requireStringPtr(t, in.AssociationId, "eipassoc-old", "AssociationId")
-					return nil, errors.New("cannot disassociate")
-				}
-				return ec2Fake, newFakeIMDS(t, ipv4Metadata(instanceID, currentIP))
-			},
-			wantErr:      true,
-			wantEC2Calls: []string{"DescribeAddresses", "DisassociateAddress"},
-			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
-				"GetMetadata:meta-data/public-ipv4",
 			},
 		},
 	}
