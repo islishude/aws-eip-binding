@@ -9,7 +9,9 @@ import (
 // EC2API is the subset of the EC2 service client used by the EIP binder.
 type EC2API interface {
 	DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error)
-	DisassociateAddress(ctx context.Context, params *ec2.DisassociateAddressInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateAddressOutput, error)
 	DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error)
 	AssociateAddress(ctx context.Context, params *ec2.AssociateAddressInput, optFns ...func(*ec2.Options)) (*ec2.AssociateAddressOutput, error)
+	AssignIpv6Addresses(ctx context.Context, params *ec2.AssignIpv6AddressesInput, optFns ...func(*ec2.Options)) (*ec2.AssignIpv6AddressesOutput, error)
+	UnassignIpv6Addresses(ctx context.Context, params *ec2.UnassignIpv6AddressesInput, optFns ...func(*ec2.Options)) (*ec2.UnassignIpv6AddressesOutput, error)
+	DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
 }

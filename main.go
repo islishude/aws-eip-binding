@@ -5,7 +5,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	ec2imds "github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
 	"github.com/islishude/aws-eip-binding/eip"
@@ -19,11 +21,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf("config: %v", err)
 	}
-	logger.Printf("Target EIP: %s", cfg.TargetIP)
+	logger.Printf("Target IP: %s", cfg.TargetIP)
 
 	// Load AWS configuration.
 	ctx := context.Background()
-	awsCfg, err := config.LoadDefaultConfig(ctx)
+	awsCfg, err := config.LoadDefaultConfig(ctx, awsLoadOptionsForConfig(cfg)...)
 	if err != nil {
 		logger.Fatalf("loading AWS config: %v", err)
 	}
@@ -31,7 +33,7 @@ func main() {
 
 	// Create dependencies and bind.
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	imds := eip.NewIMDSClient()
+	imds := imdsClientForConfig(cfg)
 	binder := eip.NewBinder(ec2Client, imds, logger)
 
 	result, err := binder.Bind(ctx, cfg.TargetIP)
@@ -40,8 +42,27 @@ func main() {
 	}
 
 	if result.AlreadyAssociated {
-		logger.Printf("No changes needed – EIP already on instance %s", result.InstanceID)
+		logger.Printf("No changes needed – %s %s already on instance %s", result.Family, result.TargetIP, result.InstanceID)
+	} else if result.Family == eip.IPFamilyIPv6 {
+		logger.Printf("Done – IPv6 %s on ENI %s for instance %s", result.TargetIP, result.NetworkInterfaceID, result.InstanceID)
 	} else {
 		logger.Printf("Done – association %s on instance %s", result.AssociationID, result.InstanceID)
 	}
+}
+
+func awsLoadOptionsForConfig(cfg *eip.Config) []func(*config.LoadOptions) error {
+	if cfg.Family != eip.IPFamilyIPv6 {
+		return nil
+	}
+	return []func(*config.LoadOptions) error{
+		config.WithEC2IMDSEndpointMode(ec2imds.EndpointModeStateIPv6),
+		config.WithUseDualStackEndpoint(aws.DualStackEndpointStateEnabled),
+	}
+}
+
+func imdsClientForConfig(cfg *eip.Config) *eip.IMDSClient {
+	if cfg.Family == eip.IPFamilyIPv6 {
+		return eip.NewIMDSClient(eip.WithIMDSEndpointMode(eip.IMDSEndpointModeIPv6))
+	}
+	return eip.NewIMDSClient()
 }
