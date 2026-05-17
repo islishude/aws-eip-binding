@@ -52,31 +52,39 @@ func TestAWSLoadOptionsForConfig(t *testing.T) {
 	}
 }
 
-func TestIMDSClientForConfig(t *testing.T) {
-	t.Setenv("AWS_EC2_METADATA_SERVICE_ENDPOINT", "")
-
+func TestIMDSClientOptionsForConfig(t *testing.T) {
 	tests := []struct {
-		name         string
-		cfg          eip.Config
-		wantEndpoint string
+		name             string
+		cfg              eip.Config
+		wantOptionLen    int
+		wantEndpointMode ec2imds.EndpointModeState
 	}{
 		{
-			name:         "IPv4 uses IPv4 metadata endpoint",
-			cfg:          eip.Config{Family: eip.IPFamilyIPv4},
-			wantEndpoint: eip.IMDSEndpointIPv4,
+			name:          "IPv4 disables IMDSv1 fallback",
+			cfg:           eip.Config{Family: eip.IPFamilyIPv4},
+			wantOptionLen: 1,
 		},
 		{
-			name:         "IPv6 uses IPv6 metadata endpoint",
-			cfg:          eip.Config{Family: eip.IPFamilyIPv6},
-			wantEndpoint: eip.IMDSEndpointIPv6,
+			name:             "IPv6 selects IPv6 endpoint mode and disables IMDSv1 fallback",
+			cfg:              eip.Config{Family: eip.IPFamilyIPv6},
+			wantOptionLen:    2,
+			wantEndpointMode: ec2imds.EndpointModeStateIPv6,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := imdsClientForConfig(&tt.cfg)
-			if client.Endpoint != tt.wantEndpoint {
-				t.Errorf("Endpoint = %q, want %q", client.Endpoint, tt.wantEndpoint)
+			opts := imdsClientOptionsForConfig(&tt.cfg)
+			if len(opts) != tt.wantOptionLen {
+				t.Fatalf("IMDS option count = %d, want %d", len(opts), tt.wantOptionLen)
+			}
+
+			imdsOptions := applyIMDSClientOptions(opts)
+			if imdsOptions.EnableFallback != aws.BoolTernary(false) {
+				t.Errorf("EnableFallback = %v, want %v", imdsOptions.EnableFallback, aws.BoolTernary(false))
+			}
+			if imdsOptions.EndpointMode != tt.wantEndpointMode {
+				t.Errorf("EndpointMode = %v, want %v", imdsOptions.EndpointMode, tt.wantEndpointMode)
 			}
 		})
 	}
@@ -92,4 +100,12 @@ func applyLoadOptions(t *testing.T, opts []func(*config.LoadOptions) error) conf
 		}
 	}
 	return loadOptions
+}
+
+func applyIMDSClientOptions(opts []func(*ec2imds.Options)) ec2imds.Options {
+	var imdsOptions ec2imds.Options
+	for _, opt := range opts {
+		opt(&imdsOptions)
+	}
+	return imdsOptions
 }

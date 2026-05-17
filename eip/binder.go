@@ -3,9 +3,11 @@ package eip
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/netip"
 
+	ec2imds "github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
@@ -73,18 +75,21 @@ func parseTargetAddr(targetIP string) (netip.Addr, error) {
 	return addr.Unmap(), nil
 }
 
-func (b *Binder) getMetadataTokenAndInstanceID(ctx context.Context) (string, string, error) {
-	mdToken, err := b.IMDS.GetToken(ctx)
+func (b *Binder) getInstanceID(ctx context.Context) (string, error) {
+	out, err := b.IMDS.GetMetadata(ctx, &ec2imds.GetMetadataInput{Path: "instance-id"})
 	if err != nil {
-		return "", "", fmt.Errorf("get metadata token: %w", err)
+		return "", fmt.Errorf("get instance-id: %w", err)
 	}
+	if out == nil || out.Content == nil {
+		return "", fmt.Errorf("get instance-id: empty metadata response")
+	}
+	defer out.Content.Close() //nolint:errcheck
 
-	instanceID, err := b.IMDS.GetMetadata(ctx, mdToken, "meta-data/instance-id")
+	instanceID, err := io.ReadAll(out.Content)
 	if err != nil {
-		return "", "", fmt.Errorf("get instance-id: %w", err)
+		return "", fmt.Errorf("get instance-id: %w", err)
 	}
-
-	return mdToken, instanceID, nil
+	return string(instanceID), nil
 }
 
 func (b *Binder) bindIPv4(ctx context.Context, targetIP string) (*BindResult, error) {
@@ -101,7 +106,7 @@ func (b *Binder) bindIPv4(ctx context.Context, targetIP string) (*BindResult, er
 	address := descOut.Addresses[0]
 
 	// 2. Get instance metadata and current primary ENI.
-	_, instanceID, err := b.getMetadataTokenAndInstanceID(ctx)
+	instanceID, err := b.getInstanceID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,7 @@ func (b *Binder) bindIPv4(ctx context.Context, targetIP string) (*BindResult, er
 func (b *Binder) bindIPv6(ctx context.Context, targetAddr netip.Addr) (*BindResult, error) {
 	targetIP := targetAddr.String()
 
-	_, instanceID, err := b.getMetadataTokenAndInstanceID(ctx)
+	instanceID, err := b.getInstanceID(ctx)
 	if err != nil {
 		return nil, err
 	}

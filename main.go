@@ -37,7 +37,7 @@ func main() {
 
 	// Create dependencies and bind.
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	imds := imdsClientForConfig(cfg)
+	imds := ec2imds.NewFromConfig(awsCfg, imdsClientOptionsForConfig(cfg)...)
 	binder := eip.NewBinder(ec2Client, imds, logger)
 
 	result, err := binder.Bind(ctx, cfg.TargetIP)
@@ -64,9 +64,16 @@ func awsLoadOptionsForConfig(cfg *eip.Config) []func(*config.LoadOptions) error 
 	}
 }
 
-func imdsClientForConfig(cfg *eip.Config) *eip.IMDSClient {
-	if cfg.Family == eip.IPFamilyIPv6 {
-		return eip.NewIMDSClient(eip.WithIMDSEndpointMode(eip.IMDSEndpointModeIPv6))
+func imdsClientOptionsForConfig(cfg *eip.Config) []func(*ec2imds.Options) {
+	opts := []func(*ec2imds.Options){
+		func(o *ec2imds.Options) {
+			o.EnableFallback = aws.BoolTernary(false)
+		},
 	}
-	return eip.NewIMDSClient()
+	if cfg.Family == eip.IPFamilyIPv6 {
+		opts = append(opts, func(o *ec2imds.Options) {
+			o.EndpointMode = ec2imds.EndpointModeStateIPv6
+		})
+	}
+	return opts
 }

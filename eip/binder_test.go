@@ -6,8 +6,10 @@ import (
 	"io"
 	"log"
 	"slices"
+	"strings"
 	"testing"
 
+	ec2imds "github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
@@ -122,8 +124,6 @@ func (f *fakeEC2) assertCalls(want []string) {
 type fakeIMDS struct {
 	t *testing.T
 
-	token       string
-	tokenErr    error
 	metadata    map[string]string
 	metadataErr map[string]error
 	calls       []string
@@ -133,31 +133,27 @@ func newFakeIMDS(t *testing.T, metadata map[string]string) *fakeIMDS {
 	t.Helper()
 	return &fakeIMDS{
 		t:        t,
-		token:    "tok",
 		metadata: metadata,
 	}
 }
 
-func (f *fakeIMDS) GetToken(_ context.Context) (string, error) {
+func (f *fakeIMDS) GetMetadata(_ context.Context, in *ec2imds.GetMetadataInput, _ ...func(*ec2imds.Options)) (*ec2imds.GetMetadataOutput, error) {
 	f.t.Helper()
-	f.calls = append(f.calls, "GetToken")
-	return f.token, f.tokenErr
-}
-
-func (f *fakeIMDS) GetMetadata(_ context.Context, token, path string) (string, error) {
-	f.t.Helper()
-	f.calls = append(f.calls, "GetMetadata:"+path)
-	if token != f.token {
-		f.t.Errorf("metadata token = %q, want %q", token, f.token)
+	path := ""
+	if in != nil {
+		path = in.Path
 	}
+	f.calls = append(f.calls, "GetMetadata:"+path)
 	if err := f.metadataErr[path]; err != nil {
-		return "", err
+		return nil, err
 	}
 	value, ok := f.metadata[path]
 	if !ok {
 		f.t.Fatalf("unexpected metadata path %q", path)
 	}
-	return value, nil
+	return &ec2imds.GetMetadataOutput{
+		Content: io.NopCloser(strings.NewReader(value)),
+	}, nil
 }
 
 func (f *fakeIMDS) assertCalls(want []string) {
@@ -165,6 +161,24 @@ func (f *fakeIMDS) assertCalls(want []string) {
 	if !slices.Equal(f.calls, want) {
 		f.t.Fatalf("IMDS calls = %v, want %v", f.calls, want)
 	}
+}
+
+type metadataClientFunc func(context.Context, *ec2imds.GetMetadataInput, ...func(*ec2imds.Options)) (*ec2imds.GetMetadataOutput, error)
+
+func (f metadataClientFunc) GetMetadata(ctx context.Context, in *ec2imds.GetMetadataInput, optFns ...func(*ec2imds.Options)) (*ec2imds.GetMetadataOutput, error) {
+	return f(ctx, in, optFns...)
+}
+
+type readErrorCloser struct {
+	err error
+}
+
+func (r readErrorCloser) Read(_ []byte) (int, error) {
+	return 0, r.err
+}
+
+func (r readErrorCloser) Close() error {
+	return nil
 }
 
 func silentLogger() *log.Logger {
@@ -300,7 +314,76 @@ func requireSubnetInput(t *testing.T, in *ec2.DescribeSubnetsInput, subnetID str
 
 func instanceMetadata(instanceID string) map[string]string {
 	return map[string]string{
-		"meta-data/instance-id": instanceID,
+		"instance-id": instanceID,
+	}
+}
+
+func TestGetInstanceID(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   *ec2imds.GetMetadataOutput
+		err      error
+		want     string
+		wantErr  bool
+		wantPath string
+	}{
+		{
+			name: "success",
+			output: &ec2imds.GetMetadataOutput{
+				Content: io.NopCloser(strings.NewReader("i-test")),
+			},
+			want:     "i-test",
+			wantPath: "instance-id",
+		},
+		{
+			name:     "metadata error",
+			err:      errors.New("imds unavailable"),
+			wantErr:  true,
+			wantPath: "instance-id",
+		},
+		{
+			name: "read error",
+			output: &ec2imds.GetMetadataOutput{
+				Content: readErrorCloser{err: errors.New("read failed")},
+			},
+			wantErr:  true,
+			wantPath: "instance-id",
+		},
+		{
+			name:     "empty response",
+			output:   &ec2imds.GetMetadataOutput{},
+			wantErr:  true,
+			wantPath: "instance-id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath string
+			binder := &Binder{
+				IMDS: metadataClientFunc(func(_ context.Context, in *ec2imds.GetMetadataInput, _ ...func(*ec2imds.Options)) (*ec2imds.GetMetadataOutput, error) {
+					if in != nil {
+						gotPath = in.Path
+					}
+					return tt.output, tt.err
+				}),
+			}
+
+			got, err := binder.getInstanceID(context.Background())
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("instance ID = %q, want %q", got, tt.want)
+			}
+			if gotPath != tt.wantPath {
+				t.Errorf("metadata path = %q, want %q", gotPath, tt.wantPath)
+			}
+		})
 	}
 }
 
@@ -350,8 +433,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -392,8 +474,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -431,8 +512,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -472,8 +552,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -505,24 +584,6 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			wantIMDSCalls: nil,
 		},
 		{
-			name: "metadata token error",
-			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
-				ec2Fake := newFakeEC2(t)
-				ec2Fake.describeAddresses = func(in *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
-					requireDescribeAddressInput(t, in, targetIP)
-					return &ec2.DescribeAddressesOutput{
-						Addresses: []types.Address{elasticAddress(targetIP, allocation, "")},
-					}, nil
-				}
-				imdsFake := newFakeIMDS(t, nil)
-				imdsFake.tokenErr = errors.New("imds down")
-				return ec2Fake, imdsFake
-			},
-			wantErr:       true,
-			wantEC2Calls:  []string{"DescribeAddresses"},
-			wantIMDSCalls: []string{"GetToken"},
-		},
-		{
 			name: "instance metadata error",
 			setup: func(t *testing.T) (*fakeEC2, *fakeIMDS) {
 				ec2Fake := newFakeEC2(t)
@@ -534,15 +595,14 @@ func TestBindIPv4Scenarios(t *testing.T) {
 				}
 				imdsFake := newFakeIMDS(t, nil)
 				imdsFake.metadataErr = map[string]error{
-					"meta-data/instance-id": errors.New("instance id unavailable"),
+					"instance-id": errors.New("instance id unavailable"),
 				}
 				return ec2Fake, imdsFake
 			},
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -566,8 +626,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -593,8 +652,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -626,8 +684,7 @@ func TestBindIPv4Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeAddresses", "DescribeNetworkInterfaces", "AssociateAddress"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 	}
@@ -689,8 +746,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -733,8 +789,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeNetworkInterfaces", "DescribeSubnets", "DescribeNetworkInterfaces", "AssignIpv6Addresses"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -784,8 +839,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			},
 			wantEC2Calls: []string{"DescribeNetworkInterfaces", "DescribeSubnets", "DescribeNetworkInterfaces", "UnassignIpv6Addresses", "AssignIpv6Addresses"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -812,8 +866,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeNetworkInterfaces", "DescribeSubnets"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -832,8 +885,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeNetworkInterfaces"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -869,8 +921,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeNetworkInterfaces", "DescribeSubnets", "DescribeNetworkInterfaces", "AssignIpv6Addresses"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 		{
@@ -908,8 +959,7 @@ func TestBindIPv6Scenarios(t *testing.T) {
 			wantErr:      true,
 			wantEC2Calls: []string{"DescribeNetworkInterfaces", "DescribeSubnets", "DescribeNetworkInterfaces", "UnassignIpv6Addresses"},
 			wantIMDSCalls: []string{
-				"GetToken",
-				"GetMetadata:meta-data/instance-id",
+				"GetMetadata:instance-id",
 			},
 		},
 	}
