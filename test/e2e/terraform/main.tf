@@ -177,7 +177,7 @@ resource "aws_instance" "runner" {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
     http_protocol_ipv6          = var.enable_ipv6 ? "enabled" : "disabled"
-    http_put_response_hop_limit = 2
+    http_put_response_hop_limit = 1
     instance_metadata_tags      = "enabled"
   }
 
