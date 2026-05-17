@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -23,8 +25,10 @@ func main() {
 	}
 	logger.Printf("Target IP: %s", cfg.TargetIP)
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	// Load AWS configuration.
-	ctx := context.Background()
 	awsCfg, err := config.LoadDefaultConfig(ctx, awsLoadOptionsForConfig(cfg)...)
 	if err != nil {
 		logger.Fatalf("loading AWS config: %v", err)
